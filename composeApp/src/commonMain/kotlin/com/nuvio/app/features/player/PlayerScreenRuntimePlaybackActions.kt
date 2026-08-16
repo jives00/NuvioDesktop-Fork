@@ -1,6 +1,7 @@
 package com.nuvio.app.features.player
 
 import com.nuvio.app.features.tmdb.TmdbService
+import com.nuvio.app.features.tracking.DirectScrobbleRepository // [FORK]
 import com.nuvio.app.features.tracking.TrackingMediaReference
 import com.nuvio.app.features.tracking.TrackingScrobbleAction
 import com.nuvio.app.features.tracking.TrackingScrobbleCoordinator
@@ -210,6 +211,28 @@ internal fun PlayerScreenRuntime.emitStopScrobbleForCurrentProgress() {
     }
 }
 
+// [FORK] emitStopScrobbleForCurrentProgress() is gated behind shouldSendStopScrobble(), which is
+// false once a pause has cleared hasRequestedScrobbleStartForCurrentItem. So pausing and then
+// backing out of the player sends no stop at all, and the self-hosted server's now_playing lingers
+// until it times out hours later. Trakt.tv expires its own now-watching state, so upstream never
+// had to care. Fire an unconditional direct stop on every real exit or stream switch; consecutive
+// duplicates are deduped inside DirectScrobbleRepository.
+internal fun PlayerScreenRuntime.emitDirectScrobbleStopForExit() {
+    val progressPercent = currentPlaybackProgressPercent()
+    val mediaSnapshot = currentTrackingMedia
+    val inputsSnapshot = snapshotTrackingScrobbleItemInputs()
+    scope.launch(NonCancellable) {
+        // currentTrackingMedia is nulled by the preceding pause, so fall back the same way
+        // emitTrackingScrobbleTerminal does.
+        val media = mediaSnapshot ?: inputsSnapshot.buildMedia()
+        if (!media.hasResolvableIdentity) return@launch
+        DirectScrobbleRepository.scrobble(
+            action = TrackingScrobbleAction.STOP,
+            event = TrackingScrobbleEvent(media = media, progressPercent = progressPercent.toDouble()),
+        )
+    }
+}
+
 internal fun shouldSendStopScrobble(
     hasActiveScrobble: Boolean,
     progressPercent: Float,
@@ -262,7 +285,10 @@ internal fun PlayerScreenRuntime.flushWatchProgress(
 ) {
     when (scrobbleAction) {
         TrackingScrobbleAction.PAUSE -> emitTrackingScrobblePause()
-        TrackingScrobbleAction.STOP -> emitStopScrobbleForCurrentProgress()
+        TrackingScrobbleAction.STOP -> {
+            emitStopScrobbleForCurrentProgress()
+            emitDirectScrobbleStopForExit() // [FORK]
+        }
         TrackingScrobbleAction.START -> Unit
     }
     WatchProgressRepository.flushPlaybackProgress(

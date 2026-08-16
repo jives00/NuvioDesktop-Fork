@@ -40,6 +40,7 @@ correctly sees itself as up to date.
 |---|---|
 | `composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/DirectScrobbleRepository.kt` | **New file** — builds the payload and POSTs it. No upstream equivalent, so it can never conflict. |
 | `composeApp/src/commonMain/kotlin/com/nuvio/app/features/tracking/TrackingScrobbleCoordinator.kt` | Two lines — one in `scrobble`, one in `scrobbleSeek`. |
+| `composeApp/src/commonMain/kotlin/com/nuvio/app/features/player/PlayerScreenRuntimePlaybackActions.kt` | `emitDirectScrobbleStopForExit()` plus one call in `flushWatchProgress`. See "Exit never clears now_playing" below. |
 | `composeApp/build.gradle.kts` | One block in `GenerateRuntimeConfigsTask` generating `ScrobbleConfig`. |
 
 `DirectScrobbleRepository` is **not** registered via `TrackingProviderRegistry.registerScrobbler`.
@@ -58,6 +59,26 @@ the connected-provider dispatch. It fires whether or not Trakt.tv or Simkl are c
 The server models a pause as a stop that keeps `now_playing` alive. Collapsing `PAUSE` and `STOP`
 into the same call regresses into one of two bugs: either `now_playing` never clears on a real stop
 (it lingers ~4 hours until the session times out), or a pause wrongly clears the dashboard hero.
+
+#### Exit never clears now_playing
+
+Upstream gates its stop scrobble behind `shouldSendStopScrobble(hasActiveScrobble, progress)`, which
+is `hasActiveScrobble || progress >= 80f`. But `emitTrackingScrobbleTerminal` sets
+`hasRequestedScrobbleStartForCurrentItem = false` as soon as a **pause** is emitted. So the sequence
+*play → pause → back out* sends no stop at all: the back handler (`onBackWithProgress` →
+`flushWatchProgress()`) hits the guard and returns. There is also no stop button in the player, so
+backing out is the normal way to end playback.
+
+Upstream never had to care — Trakt.tv expires its own now-watching state — but the self-hosted
+server holds `now_playing` until it times out hours later. `flushWatchProgress`'s `STOP` branch
+therefore also calls `emitDirectScrobbleStopForExit()`, which bypasses the guard and always sends a
+direct stop with `paused = false`. It snapshots `currentTrackingMedia` with the same
+`snapshotTrackingScrobbleItemInputs()` fallback `emitTrackingScrobbleTerminal` uses, because the
+preceding pause nulls it out.
+
+Because that adds a second stop on the paths where upstream's stop *does* fire,
+`DirectScrobbleRepository` collapses identical consecutive sends within 10s. The dedupe key includes
+`paused`, so a pause followed by a real exit is correctly treated as two distinct calls.
 
 Episode numbers go through `TraktEpisodeMappingService.resolveEpisodeMapping`, the same absolute →
 season/episode mapping `TraktScrobbleRepository` uses, so both endpoints receive identical numbering.
@@ -151,11 +172,14 @@ otherwise fail against the sync job's own conflict PRs.
 2. **`TrackingScrobbleCoordinator.kt`** — if upstream restructures dispatch, ensure both `scrobble`
    and `scrobbleSeek` still call `DirectScrobbleRepository.scrobble(action, event)`, and that it
    stays **outside** the connected-provider path so it fires with no tracker connected.
-3. **`build.gradle.kts`** — re-apply the `ScrobbleConfig` block if upstream reworks
+3. **`PlayerScreenRuntimePlaybackActions.kt`** — `flushWatchProgress`'s `STOP` branch must keep
+   calling `emitDirectScrobbleStopForExit()`. Losing it during a conflict silently regresses the
+   "now_playing never clears on exit" bug, which looks fine right up until you pause something.
+4. **`build.gradle.kts`** — re-apply the `ScrobbleConfig` block if upstream reworks
    `GenerateRuntimeConfigsTask`. It is a self-contained addition, not an edit to existing lines.
-4. **`AppUpdaterPlatform.desktop.kt`** — re-apply `owner`/`repo` after any merge touching
+5. **`AppUpdaterPlatform.desktop.kt`** — re-apply `owner`/`repo` after any merge touching
    `releaseSource`. Also verify `includePrereleases` still admits the fork's release style.
-5. **Workflows** — ours are fork-specific filenames, so they never conflict with upstream's.
+6. **Workflows** — ours are fork-specific filenames, so they never conflict with upstream's.
 
 ---
 

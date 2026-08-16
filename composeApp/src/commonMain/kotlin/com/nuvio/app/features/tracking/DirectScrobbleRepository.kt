@@ -4,6 +4,7 @@ import co.touchlab.kermit.Logger
 import com.nuvio.app.core.build.AppVersionPolicy
 import com.nuvio.app.features.addons.httpRequestRaw
 import com.nuvio.app.features.trakt.TraktEpisodeMappingService
+import com.nuvio.app.features.trakt.TraktPlatformClock
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -17,6 +18,8 @@ import kotlinx.serialization.json.Json
 // than something the user connects. TrackingScrobbleCoordinator invokes it alongside the
 // registered providers instead.
 object DirectScrobbleRepository {
+    private const val duplicateSendWindowMs = 10_000L
+
     private val log = Logger.withTag("DirectScrobble")
     private val json = Json {
         encodeDefaults = false
@@ -25,6 +28,14 @@ object DirectScrobbleRepository {
 
     private val isEnabled: Boolean
         get() = ScrobbleConfig.API_URL.isNotBlank()
+
+    // The player emits a stop from more than one path on exit (see emitDirectScrobbleStopForExit),
+    // so collapse identical consecutive sends. Keyed on paused too: a pause followed by a real exit
+    // is two genuinely different calls and must both go through.
+    private data class SendStamp(val endpoint: String, val paused: Boolean, val itemKey: String, val progress: Int)
+
+    private var lastSend: SendStamp? = null
+    private var lastSendAtMs: Long = 0L
 
     suspend fun scrobble(action: TrackingScrobbleAction, event: TrackingScrobbleEvent) {
         if (!isEnabled) return
@@ -42,6 +53,17 @@ object DirectScrobbleRepository {
             progressPercent = event.progressPercent.toFloat().coerceIn(0f, 100f),
             paused = paused,
         ) ?: return
+
+        val stamp = SendStamp(
+            endpoint = endpoint,
+            paused = paused,
+            itemKey = event.media.stableKey,
+            progress = body.progress.toInt(),
+        )
+        val nowMs = TraktPlatformClock.nowEpochMs()
+        if (stamp == lastSend && nowMs - lastSendAtMs < duplicateSendWindowMs) return
+        lastSend = stamp
+        lastSendAtMs = nowMs
 
         val url = ScrobbleConfig.API_URL.trimEnd('/') + "/" + endpoint
         val response = runCatching {
