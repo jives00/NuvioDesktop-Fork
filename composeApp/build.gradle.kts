@@ -126,6 +126,21 @@ abstract class GenerateRuntimeConfigsTask : DefaultTask() {
             )
         }
 
+        // [FORK] Direct scrobble endpoint config (self-hosted Trakt clone).
+        outDir.resolve("com/nuvio/app/features/tracking").apply {
+            mkdirs()
+            resolve("ScrobbleConfig.kt").writeText(
+                """
+                |package com.nuvio.app.features.tracking
+                |
+                |object ScrobbleConfig {
+                |    const val API_URL = "${props.getProperty("SCROBBLE_API_URL", "")}"
+                |    const val API_KEY = "${props.getProperty("SCROBBLE_API_KEY", "")}"
+                |}
+                """.trimMargin()
+            )
+        }
+
         outDir.resolve("com/nuvio/app/features/player/skip").apply {
             mkdirs()
             resolve("IntroDbConfig.kt").writeText(

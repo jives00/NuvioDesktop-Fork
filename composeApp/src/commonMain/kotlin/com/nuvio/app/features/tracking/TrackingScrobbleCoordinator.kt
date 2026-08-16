@@ -22,6 +22,7 @@ object TrackingScrobbleCoordinator {
     ): List<TrackingScrobbleFailure> {
         if (profileId != ProfileRepository.activeProfileId) return emptyList()
         TrackingProviderRegistry.ensureLoaded()
+        DirectScrobbleRepository.scrobble(action, event) // [FORK] always-on, independent of connected providers
         val failures = dispatchTrackingScrobble(
             scrobblers = TrackingProviderRegistry.connectedScrobblers(),
             profileId = profileId,
@@ -43,6 +44,7 @@ object TrackingScrobbleCoordinator {
     ): List<TrackingScrobbleFailure> {
         if (profileId != ProfileRepository.activeProfileId) return emptyList()
         TrackingProviderRegistry.ensureLoaded()
+        DirectScrobbleRepository.scrobble(action, event) // [FORK] mirrors Trakt's STOP_AND_RESTART seek behaviour
         val failures = dispatchTrackingSeekScrobble(
             scrobblers = TrackingProviderRegistry.connectedScrobblers(),
             profileId = profileId,

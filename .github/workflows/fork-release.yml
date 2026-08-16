@@ -1,0 +1,154 @@
+name: Fork Release (Windows MSI)
+
+# [FORK] Replaces upstream's desktop-release.yml, which is unusable here: it requires
+# target=all (so macOS, which needs an Apple Developer cert we don't have), hard-fails on
+# missing Apple/Sentry secrets, and enforces "the version bump is the final commit before
+# release". This builds the Windows MSI only and publishes it as a fork release, which the
+# in-app updater then picks up.
+#
+# Normally dispatched by sync-upstream.yml when upstream publishes a new release. Run it
+# manually to ship a fork-only change (see the version input caveat below).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Version to build and tag, e.g. 0.1.19-alpha. Defaults to
+          composeApp/Configuration/DesktopVersion.properties, which lags behind the real
+          release version on Dev — pass it explicitly unless you know it is current.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Windows x64 MSI
+    runs-on: windows-2022
+    env:
+      LOCAL_PROPERTIES_BASE64: ${{ secrets.NUVIO_DESKTOP_LOCAL_PROPERTIES_BASE64 }}
+      WEBVIEW2_VERSION: 1.0.4078.44
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          VERSION="${INPUT_VERSION}"
+          if [[ -z "${VERSION}" ]]; then
+            VERSION="$(grep '^VERSION_NAME=' composeApp/Configuration/DesktopVersion.properties | cut -d= -f2 | tr -d '[:space:]')"
+          fi
+          if [[ -z "${VERSION}" ]]; then
+            echo "Could not resolve a desktop version." >&2
+            exit 1
+          fi
+          echo "name=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Building ${VERSION}"
+
+      - name: Fetch Windows runtime from LFS
+        shell: bash
+        # Only the Windows objects — pulling every LFS object would drag in the macOS
+        # runtimes too, for nothing.
+        run: |
+          git lfs pull --include="composeApp/src/desktopMain/native/windows/runtime/**,composeApp/src/desktopMain/resources/torrserver/windows-amd64/TorrServer.exe" --exclude=""
+          runtime_path="composeApp/src/desktopMain/native/windows/runtime/libmpv-2.dll"
+          if [[ ! -f "${runtime_path}" ]] || (( $(wc -c < "${runtime_path}") < 1000000 )); then
+            echo "The bundled Windows libmpv runtime was not materialized from Git LFS." >&2
+            exit 1
+          fi
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Write local.properties
+        shell: bash
+        run: |
+          if [[ -z "${LOCAL_PROPERTIES_BASE64}" ]]; then
+            echo "Missing secret NUVIO_DESKTOP_LOCAL_PROPERTIES_BASE64." >&2
+            exit 1
+          fi
+          printf '%s' "${LOCAL_PROPERTIES_BASE64}" | base64 --decode > local.properties
+          # sdk.dir and the Android/macOS signing entries are meaningless on this runner.
+          sed -i -E '/^[[:space:]]*(sdk\.dir|NUVIO_RELEASE_(STORE_FILE|STORE_PASSWORD|KEY_ALIAS|KEY_PASSWORD)|NUVIO_MACOS_[A-Z_]+)[[:space:]]*=/d' local.properties
+          for property_name in NUVIO_SUPABASE_URL NUVIO_SUPABASE_ANON_KEY SCROBBLE_API_URL SCROBBLE_API_KEY; do
+            if ! grep -Eq "^${property_name}=.+" local.properties; then
+              echo "Missing required property in local.properties: ${property_name}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Install WebView2 SDK
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Web.WebView2 `
+            -Version $env:WEBVIEW2_VERSION `
+            -OutputDirectory "$env:RUNNER_TEMP\nuget" `
+            -DirectDownload `
+            -NonInteractive `
+            -NoCache
+
+          $webView2Root = Join-Path $env:RUNNER_TEMP "nuget\Microsoft.Web.WebView2.$env:WEBVIEW2_VERSION"
+          if (-not (Test-Path (Join-Path $webView2Root "build\native\x64\WebView2Loader.dll.lib"))) {
+            throw "WebView2Loader.dll.lib was not found under $webView2Root"
+          }
+          "WEBVIEW2_ROOT=$webView2Root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build MSI
+        shell: pwsh
+        env:
+          # Overrides DesktopVersion.properties, which upstream leaves stale on Dev.
+          NUVIO_DESKTOP_VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: |
+          & .\gradlew.bat `
+            :composeApp:packageReleaseMsi `
+            "-Pnuvio.webview2.dir=$env:WEBVIEW2_ROOT" `
+            "-Pcompose.desktop.packaging.checkJdkVendor=false" `
+            --no-configuration-cache `
+            --no-daemon `
+            --stacktrace
+
+      - name: Verify MSI
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.name }}
+        run: |
+          msi="composeApp/build/compose/release-msis/Nuvio-Windows-x64-${RELEASE_VERSION}.msi"
+          if [[ ! -f "${msi}" ]]; then
+            echo "Expected MSI was not produced: ${msi}" >&2
+            ls -R composeApp/build/compose || true
+            exit 1
+          fi
+          sha256sum "${msi}"
+
+      - name: Publish fork release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ steps.version.outputs.name }}
+        run: |
+          msi="composeApp/build/compose/release-msis/Nuvio-Windows-x64-${RELEASE_VERSION}.msi"
+          # A rebuild of the same version replaces the release so the newest build always wins.
+          # Note this does NOT trigger the in-app updater for anyone already on that version —
+          # the updater compares version numbers, not build dates.
+          gh release delete "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag || true
+          gh release create "${RELEASE_VERSION}" "${msi}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Fork ${RELEASE_VERSION}" \
+            --notes "Fork build of upstream ${RELEASE_VERSION}, scrobbling to the self-hosted Trakt instance. Windows x64 only."

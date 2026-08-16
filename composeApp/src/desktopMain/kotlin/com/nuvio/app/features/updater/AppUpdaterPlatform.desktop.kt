@@ -38,8 +38,9 @@ actual object AppUpdaterPlatform {
     actual val isSupported: Boolean = currentOs != DesktopUpdaterOs.UNKNOWN
 
     actual val releaseSource: AppUpdateReleaseSource = AppUpdateReleaseSource(
-        owner = "NuvioMedia",
-        repo = "NuvioDesktop",
+        // [FORK] In-app updater points at the fork's releases, not upstream's.
+        owner = "jives00",
+        repo = "NuvioDesktop-Fork",
         channelBranch = null,
         includePrereleases = true,
         userAgent = "NuvioDesktop",

@@ -1,0 +1,166 @@
+name: Upstream Sync
+
+# [FORK] Watches upstream's *releases* rather than the Dev branch tip.
+#
+# Upstream bumps composeApp/Configuration/DesktopVersion.properties on a release branch, tags
+# it, merges, and the branch tip ends up back at an older value — Dev currently reads 0.1.17
+# while the 0.1.19 bump is already an ancestor of it. So the version file is not a usable
+# signal; the published release tag is.
+
+on:
+  schedule:
+    - cron: '0 8 * * *'  # daily at 8am UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: NuvioMedia/NuvioDesktop
+
+# Upstream's own workflow files are deliberately left untouched in the tree: deleting them
+# would produce a delete/modify conflict every time upstream edited one. They are disabled
+# through the Actions API instead (see FORK_CHANGES.md), which leaves no diff to conflict on.
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # PAT rather than GITHUB_TOKEN: pushes made with GITHUB_TOKEN never trigger
+          # downstream workflow runs, and it cannot push changes under .github/workflows/.
+          token: ${{ secrets.SYNC_PAT }}
+          # The merge only needs history, not the ~170MB of LFS binaries.
+          lfs: false
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Compare upstream and fork releases
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_PAT }}
+        run: |
+          UPSTREAM_TAG=$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq '.tag_name' 2>/dev/null || true)
+          if [ -z "${UPSTREAM_TAG}" ]; then
+            echo "Could not read the latest upstream release." >&2
+            exit 1
+          fi
+          FORK_TAG=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name' 2>/dev/null || true)
+
+          echo "upstream_tag=${UPSTREAM_TAG}" >> "$GITHUB_OUTPUT"
+          echo "fork_tag=${FORK_TAG}" >> "$GITHUB_OUTPUT"
+          if [ "${UPSTREAM_TAG}" = "${FORK_TAG}" ]; then
+            echo "needs_sync=false" >> "$GITHUB_OUTPUT"
+            echo "Already on upstream ${UPSTREAM_TAG}."
+          else
+            echo "needs_sync=true" >> "$GITHUB_OUTPUT"
+            echo "Upstream is at ${UPSTREAM_TAG}, fork is at ${FORK_TAG:-<none>}."
+          fi
+
+      - name: Fetch upstream release commit
+        if: steps.check.outputs.needs_sync == 'true'
+        env:
+          UPSTREAM_TAG: ${{ steps.check.outputs.upstream_tag }}
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream "refs/tags/${UPSTREAM_TAG}:refs/tags/upstream-${UPSTREAM_TAG}"
+
+      - name: Attempt merge
+        if: steps.check.outputs.needs_sync == 'true'
+        id: merge
+        env:
+          UPSTREAM_TAG: ${{ steps.check.outputs.upstream_tag }}
+        run: |
+          if git merge "upstream-${UPSTREAM_TAG}" --no-edit; then
+            echo "success=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "success=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push
+        if: steps.check.outputs.needs_sync == 'true' && steps.merge.outputs.success == 'true'
+        run: git push origin Dev
+
+      - name: Trigger fork release build
+        if: steps.check.outputs.needs_sync == 'true' && steps.merge.outputs.success == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_PAT }}
+          UPSTREAM_TAG: ${{ steps.check.outputs.upstream_tag }}
+        run: |
+          gh workflow run fork-release.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref Dev \
+            --field "version=${UPSTREAM_TAG}"
+
+      - name: Open conflict PR
+        if: steps.check.outputs.needs_sync == 'true' && steps.merge.outputs.success == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_PAT }}
+          UPSTREAM_TAG: ${{ steps.check.outputs.upstream_tag }}
+        run: |
+          CONFLICTS=$(git diff --name-only --diff-filter=U | sed 's/^/- /')
+          git merge --abort
+          BRANCH="upstream-sync/${UPSTREAM_TAG}"
+          git push origin --delete "$BRANCH" 2>/dev/null || true
+          git checkout -B "$BRANCH"
+          git merge "upstream-${UPSTREAM_TAG}" --no-edit || true
+          git add -A
+          git commit -m "chore: upstream sync ${UPSTREAM_TAG} [needs manual resolution]"
+          git push --force origin "$BRANCH"
+
+          BRANCH_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/Dev...${BRANCH}?expand=1"
+          EXISTING_PR=$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "$BRANCH" --json url --jq '.[0].url' || true)
+          if [ -n "$EXISTING_PR" ]; then
+            PR_URL="$EXISTING_PR"
+          else
+            # SYNC_PAT may lack pull-requests:write. The conflict branch is already pushed, so
+            # fall back to a compare link rather than failing the run over it.
+            PR_URL=$(gh pr create \
+              --title "Upstream sync ${UPSTREAM_TAG}" \
+              --body "$(printf 'Merging upstream %s conflicted. Conflicting files:\n\n%s\n\nResolve, merge into Dev, then run the Fork Release workflow with version=%s.' "${UPSTREAM_TAG}" "${CONFLICTS}" "${UPSTREAM_TAG}")" \
+              --draft \
+              --base Dev \
+              --head "$BRANCH" \
+              --repo "${GITHUB_REPOSITORY}") || {
+                echo "::warning::Could not create PR (check SYNC_PAT scopes); falling back to a compare link."
+                PR_URL="$BRANCH_URL"
+              }
+          fi
+          echo "pr_url=${PR_URL}" >> "$GITHUB_ENV"
+          echo "conflicts<<EOF" >> "$GITHUB_ENV"
+          echo "${CONFLICTS}" >> "$GITHUB_ENV"
+          echo "EOF" >> "$GITHUB_ENV"
+
+      - name: Send conflict notification email
+        if: steps.check.outputs.needs_sync == 'true' && steps.merge.outputs.success == 'false'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: jbromberek@gmail.com
+          password: ${{ secrets.GMAIL_APP_PASSWORD }}
+          to: jbromberek@gmail.com
+          from: NuvioDesktop Fork CI <jbromberek@gmail.com>
+          subject: "NuvioDesktop fork sync needs manual merge (${{ steps.check.outputs.upstream_tag }})"
+          body: |
+            Merging upstream ${{ steps.check.outputs.upstream_tag }} conflicted.
+
+            Conflicting files:
+            ${{ env.conflicts }}
+
+            Draft PR: ${{ env.pr_url }}
+
+            After resolving and merging into Dev, run the Fork Release workflow with
+            version=${{ steps.check.outputs.upstream_tag }}.
