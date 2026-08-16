@@ -52,12 +52,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SYNC_PAT }}
         run: |
-          UPSTREAM_TAG=$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq '.tag_name' 2>/dev/null || true)
+          # gh api writes its error JSON to stdout, so a 404 would otherwise be captured as
+          # the "tag". Reset the variable on a non-zero exit instead of filtering the body.
+          UPSTREAM_TAG=$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq '.tag_name') || UPSTREAM_TAG=""
           if [ -z "${UPSTREAM_TAG}" ]; then
             echo "Could not read the latest upstream release." >&2
             exit 1
           fi
-          FORK_TAG=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name' 2>/dev/null || true)
+          # A fork with no releases yet is expected on the first run, not an error.
+          FORK_TAG=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name') || FORK_TAG=""
 
           echo "upstream_tag=${UPSTREAM_TAG}" >> "$GITHUB_OUTPUT"
           echo "fork_tag=${FORK_TAG}" >> "$GITHUB_OUTPUT"
