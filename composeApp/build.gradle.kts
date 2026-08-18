@@ -126,6 +126,7 @@ abstract class GenerateRuntimeConfigsTask : DefaultTask() {
             )
         }
 
+<<<<<<< HEAD
         // [FORK] Direct scrobble endpoint config (self-hosted Trakt clone).
         outDir.resolve("com/nuvio/app/features/tracking").apply {
             mkdirs()
@@ -136,6 +137,16 @@ abstract class GenerateRuntimeConfigsTask : DefaultTask() {
                 |object ScrobbleConfig {
                 |    const val API_URL = "${props.getProperty("SCROBBLE_API_URL", "")}"
                 |    const val API_KEY = "${props.getProperty("SCROBBLE_API_KEY", "")}"
+=======
+        outDir.resolve("com/nuvio/app/features/discordrpc").apply {
+            mkdirs()
+            resolve("DiscordConfig.kt").writeText(
+                """
+                |package com.nuvio.app.features.discordrpc
+                |
+                |object DiscordConfig {
+                |    const val CLIENT_ID = "${props.getProperty("NUVIO_DISCORD_CLIENT_ID", "1538974392376369212")}"
+>>>>>>> upstream-0.1.20-alpha
                 |}
                 """.trimMargin()
             )

@@ -13,9 +13,14 @@ import kotlin.coroutines.resume
 
 @OptIn(ExperimentalForeignApi::class)
 internal actual object AppIconPlatform {
+    actual val isSupported: Boolean = true
     actual val requiresCloseConfirmation: Boolean = false
 
     private var pendingChange: CancellableContinuation<Boolean>? = null
+
+    actual fun currentBlackBackground(): Boolean = true
+
+    actual fun setBlackBackground(enabled: Boolean): Boolean = true
 
     actual fun currentIconName(): String? = AppIconOption.entries
         .mapNotNull(AppIconOption::platformName)

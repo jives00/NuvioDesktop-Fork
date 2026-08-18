@@ -160,7 +160,7 @@ private fun AppIconPickerDialog(
         ) {
             AppIconPickerContent(
                 state = state,
-                columns = 3,
+                    columns = 3,
                 onSelected = onSelected,
             )
         }
@@ -218,6 +218,7 @@ private fun AppIconPickerContent(
                             icon = icon,
                             selected = state.selected == icon,
                             pending = state.pending == icon,
+                            blackBackground = state.blackBackground,
                             enabled = state.pending == null,
                             onClick = { onSelected(icon) },
                             modifier = Modifier.weight(1f),
@@ -237,6 +238,7 @@ private fun AppIconChoice(
     icon: AppIconOption,
     selected: Boolean,
     pending: Boolean,
+    blackBackground: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -261,6 +263,7 @@ private fun AppIconChoice(
             Box {
                 AppIconThumbnail(
                     icon = icon,
+                    blackBackground = blackBackground,
                     modifier = Modifier.size(78.dp),
                 )
                 if (selected || pending) {
@@ -312,10 +315,11 @@ internal fun AppIconThumbnail(
     modifier: Modifier = Modifier,
     contentDescription: String? = null,
     cornerRadius: Dp = 18.dp,
+    blackBackground: Boolean = true,
 ) {
     val tokens = MaterialTheme.nuvio
     Image(
-        painter = painterResource(icon.previewResource),
+        painter = painterResource(icon.previewResource(blackBackground)),
         contentDescription = contentDescription,
         modifier = modifier
             .aspectRatio(1f)
