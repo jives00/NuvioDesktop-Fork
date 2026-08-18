@@ -60,6 +60,8 @@ import nuvio.composeapp.generated.resources.compose_settings_page_streams
 import nuvio.composeapp.generated.resources.settings_appearance_app_language
 import nuvio.composeapp.generated.resources.settings_appearance_app_language_sheet_title
 import nuvio.composeapp.generated.resources.settings_appearance_app_icon
+import nuvio.composeapp.generated.resources.settings_appearance_app_icon_black_background
+import nuvio.composeapp.generated.resources.settings_appearance_app_icon_black_background_description
 import nuvio.composeapp.generated.resources.settings_appearance_nav_bar_style
 import nuvio.composeapp.generated.resources.settings_appearance_nav_bar_style_sheet_title
 import nuvio.composeapp.generated.resources.settings_appearance_amoled_black
@@ -96,6 +98,7 @@ internal fun LazyListScope.appearanceSettingsContent(
     onLiquidGlassNativeTabBarToggle: (Boolean) -> Unit,
     appIconState: AppIconSettingsState,
     onAppIconSelected: (AppIconOption) -> Unit,
+    onAppIconBackgroundChanged: (Boolean) -> Unit,
     onAppIconFailureDismissed: () -> Unit,
     selectedAppLanguage: AppLanguage,
     onAppLanguageSelected: (AppLanguage) -> Unit,
@@ -207,7 +210,7 @@ internal fun LazyListScope.appearanceSettingsContent(
                         onClick = onHoverPreviewClick,
                     )
                 }
-                if (!isDesktop) {
+                if (AppIconPlatform.isSupported) {
                     SettingsGroupDivider(isTablet = isTablet)
                     SettingsNavigationRow(
                         title = stringResource(Res.string.settings_appearance_app_icon),
@@ -217,6 +220,7 @@ internal fun LazyListScope.appearanceSettingsContent(
                         trailingContent = {
                             AppIconThumbnail(
                                 icon = appIconState.selected,
+                                blackBackground = appIconState.blackBackground,
                                 modifier = Modifier.size(if (isTablet) 44.dp else 40.dp),
                                 cornerRadius = if (isTablet) 11.dp else 10.dp,
                             )
@@ -225,6 +229,14 @@ internal fun LazyListScope.appearanceSettingsContent(
                             onAppIconFailureDismissed()
                             showAppIconPicker = true
                         },
+                    )
+                    SettingsGroupDivider(isTablet = isTablet)
+                    SettingsSwitchRow(
+                        title = stringResource(Res.string.settings_appearance_app_icon_black_background),
+                        description = stringResource(Res.string.settings_appearance_app_icon_black_background_description),
+                        checked = appIconState.blackBackground,
+                        isTablet = isTablet,
+                        onCheckedChange = onAppIconBackgroundChanged,
                     )
                 }
                 SettingsGroupDivider(isTablet = isTablet)
@@ -268,7 +280,7 @@ internal fun LazyListScope.appearanceSettingsContent(
             )
         }
 
-        if (showAppIconPicker && !isDesktop) {
+        if (showAppIconPicker) {
             AppIconPicker(
                 isTablet = isTablet,
                 state = appIconState,

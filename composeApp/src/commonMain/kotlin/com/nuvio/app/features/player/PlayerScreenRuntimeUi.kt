@@ -15,6 +15,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import co.touchlab.kermit.Logger
 import com.nuvio.app.core.format.formatReleaseDateForDisplay
+import com.nuvio.app.core.i18n.localizedByteUnit
+import com.nuvio.app.core.ui.AppPresenceState
+import com.nuvio.app.core.ui.PresenceSnapshot
 import com.nuvio.app.core.ui.nuvio
 import com.nuvio.app.features.debrid.DebridSettingsRepository
 import com.nuvio.app.features.debrid.DirectDebridPlaybackResolver
@@ -26,6 +29,7 @@ import com.nuvio.app.features.p2p.formatP2pMegabytes
 import com.nuvio.app.features.p2p.formatP2pSpeed
 import com.nuvio.app.features.player.skip.SkipIntroRepository
 import com.nuvio.app.features.streams.AddonStreamGroup
+import com.nuvio.app.features.streams.StreamBadgeSettingsRepository
 import com.nuvio.app.features.streams.StreamItem
 import com.nuvio.app.features.streams.isSelectableForPlayback
 import com.nuvio.app.features.watchprogress.buildPlaybackVideoId
@@ -49,6 +53,25 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
     val episodeNumber = activeEpisodeNumber
     val episodeTitle = activeEpisodeTitle
     val isEpisode = seasonNumber != null && episodeNumber != null
+
+    LaunchedEffect(runtime.title, runtime.poster, seasonNumber, episodeNumber, episodeTitle, playbackSnapshot.isPlaying) {
+        val episodeLabel = if (isEpisode) {
+            val base = "S${seasonNumber}E${episodeNumber}"
+            if (!episodeTitle.isNullOrBlank()) "$base - $episodeTitle" else base
+        } else {
+            null
+        }
+        AppPresenceState.publish(
+            PresenceSnapshot.Player(
+                title = runtime.title,
+                episodeLabel = episodeLabel,
+                posterUrl = runtime.poster,
+                isPlaying = playbackSnapshot.isPlaying,
+                positionMs = playbackSnapshot.positionMs,
+            ),
+        )
+    }
+
     val currentGestureFeedback = liveGestureFeedback ?: gestureFeedback
     val isP2pPlaybackActive = activeTorrentInfoHash != null
     val p2pConnecting = p2pStreamingState as? P2pStreamingState.Connecting
@@ -251,6 +274,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
         subtitleBuiltInTabLabel = stringResource(Res.string.compose_player_built_in),
         subtitleAddonsTabLabel = stringResource(Res.string.addon_title),
         subtitleStyleTabLabel = stringResource(Res.string.compose_player_style),
+        customSubtitleStyleLabel = stringResource(Res.string.compose_player_use_custom_styling),
         forcedLabel = stringResource(Res.string.settings_playback_option_forced),
         noneLabel = stringResource(Res.string.compose_player_none),
         fetchSubtitlesLabel = stringResource(Res.string.compose_player_fetch_subtitles),
@@ -334,6 +358,7 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
         isLoadingAddonSubtitles = isLoadingAddonSubtitles,
         selectedAddonSubtitleId = selectedAddonSubtitleId.orEmpty(),
         useCustomSubtitles = useCustomSubtitles,
+        customSubtitleStylingEnabled = !playerSettingsUiState.useLibass,
         subtitleStyle = subtitleStyle,
         subtitleDelayMs = subtitleDelayMs,
         hasSelectedAddonSubtitle = selectedAddonSubtitle != null,
@@ -725,6 +750,13 @@ private fun PlayerScreenRuntime.handlePlayerControlsEvent(type: String, value: D
             controlsVisible = true
             controlsActivityTick += 1
         }
+        "setPlaybackState",
+        "setPlaybackStateQuiet" -> {
+            shouldPlay = value >= 0.5
+            if (type == "setPlaybackState") {
+                controlsVisible = true
+            }
+        }
         "reloadSources" -> {
             prepareSourcesForPlayerControls(forceRefresh = true)
         }
@@ -842,6 +874,9 @@ private fun PlayerScreenRuntime.handlePlayerControlsEvent(type: String, value: D
             val cue = playerControlsNearestSubtitleCues().getOrNull(value.toInt()) ?: return true
             applySubtitleAutoSyncCue(cue)
         }
+        "subtitleCustomStyleToggle" -> {
+            PlayerSettingsRepository.setUseLibass(!playerSettingsUiState.useLibass)
+        }
         "subtitleFontSizeDelta" -> {
             PlayerSettingsRepository.setSubtitleStyle(
                 subtitleStyle.copy(fontSizeSp = (subtitleStyle.fontSizeSp + value.toInt()).coerceIn(subtitleFontSizeRangeSp)),
@@ -864,8 +899,10 @@ private fun PlayerScreenRuntime.handlePlayerControlsEvent(type: String, value: D
             }
         }
         "subtitleOutlineColor" -> {
-            SubtitleColorSwatches.getOrNull(value.toInt())?.let { color ->
-                PlayerSettingsRepository.setSubtitleStyle(subtitleStyle.copy(outlineColor = color.copy(alpha = subtitleStyle.outlineColor.alpha)))
+            SubtitleOutlineColorSwatches.getOrNull(value.toInt())?.let { color ->
+                PlayerSettingsRepository.setSubtitleStyle(
+                    subtitleStyle.copy(outlineEnabled = true, outlineColor = color),
+                )
             }
         }
         "subtitleTextOpacity" -> {
@@ -1125,8 +1162,13 @@ private fun PlayerScreenRuntime.buildPlayerControlEpisodeStreamFilters(
         selectedFilter = selectedFilter,
     )
 
+@Composable
 private fun PlayerScreenRuntime.buildPlayerControlSourceItems(): List<PlayerControlSourceItem> {
     val canResolveDebrid = DebridSettingsRepository.uiState.value.canResolvePlayableLinks
+    val streamBadgeState = StreamBadgeSettingsRepository.uiState.value
+    val showFileSizeBadges = streamBadgeState.showFileSizeBadges
+    val showAddonLogo = streamBadgeState.showAddonLogo
+    val badgePlacement = streamBadgeState.badgePlacement.name
     return sourceStreamsState.groups.flatMap { group ->
         group.streams.map { stream -> group.addonId to stream }
     }.mapIndexed { index, (filterId, stream) ->
@@ -1136,14 +1178,32 @@ private fun PlayerScreenRuntime.buildPlayerControlSourceItems(): List<PlayerCont
             label = stream.streamLabel,
             subtitle = stream.streamSubtitle.orEmpty(),
             addonName = stream.addonName,
+            addonLogo = stream.addonLogo.orEmpty(),
+            showAddonLogo = showAddonLogo,
             isCurrent = isCurrentPlayerControlStream(stream),
             isEnabled = stream.isSelectableForPlayback(canResolveDebrid),
+            badges = stream.badges.map {
+                PlayerControlSourceBadgeItem(
+                    name = it.name,
+                    imageURL = it.imageURL,
+                    tagColor = it.tagColor,
+                    tagStyle = it.tagStyle,
+                    borderColor = it.borderColor,
+                )
+            },
+            formattedSize = if (showFileSizeBadges) formatStreamVideoSize(stream.behaviorHints.videoSize) else "",
+            badgePlacement = badgePlacement,
         )
     }
 }
 
+@Composable
 private fun PlayerScreenRuntime.buildPlayerControlEpisodeStreamItems(): List<PlayerControlSourceItem> {
     val canResolveDebrid = DebridSettingsRepository.uiState.value.canResolvePlayableLinks
+    val streamBadgeState = StreamBadgeSettingsRepository.uiState.value
+    val showFileSizeBadges = streamBadgeState.showFileSizeBadges
+    val showAddonLogo = streamBadgeState.showAddonLogo
+    val badgePlacement = streamBadgeState.badgePlacement.name
     return episodeStreamsRepoState.groups.flatMap { group ->
         group.streams.map { stream -> group.addonId to stream }
     }.mapIndexed { index, (filterId, stream) ->
@@ -1153,10 +1213,37 @@ private fun PlayerScreenRuntime.buildPlayerControlEpisodeStreamItems(): List<Pla
             label = stream.streamLabel,
             subtitle = stream.streamSubtitle.orEmpty(),
             addonName = stream.addonName,
+            addonLogo = stream.addonLogo.orEmpty(),
+            showAddonLogo = showAddonLogo,
             isCurrent = false,
             isEnabled = stream.isSelectableForPlayback(canResolveDebrid),
+            badges = stream.badges.map {
+                PlayerControlSourceBadgeItem(
+                    name = it.name,
+                    imageURL = it.imageURL,
+                    tagColor = it.tagColor,
+                    tagStyle = it.tagStyle,
+                    borderColor = it.borderColor,
+                )
+            },
+            formattedSize = if (showFileSizeBadges) formatStreamVideoSize(stream.behaviorHints.videoSize) else "",
+            badgePlacement = badgePlacement,
         )
     }
+}
+
+@Composable
+private fun formatStreamVideoSize(bytes: Long?): String {
+    if (bytes == null || bytes <= 0L) return ""
+    val gib = bytes.toDouble() / (1024.0 * 1024.0 * 1024.0)
+    val sizeLabel = if (gib >= 1.0) {
+        val roundedGiB = kotlin.math.round(gib * 10.0) / 10.0
+        "$roundedGiB ${localizedByteUnit("GB")}"
+    } else {
+        val mib = bytes.toDouble() / (1024.0 * 1024.0)
+        "${kotlin.math.round(mib).toInt()} ${localizedByteUnit("MB")}"
+    }
+    return stringResource(Res.string.streams_size, sizeLabel)
 }
 
 private fun PlayerScreenRuntime.isCurrentPlayerControlStream(stream: StreamItem): Boolean {

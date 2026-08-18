@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 
 internal actual object AppIconPlatform {
+    actual val isSupported: Boolean = true
     actual val requiresCloseConfirmation: Boolean = true
 
     private const val launcherPackage = "com.nuvio.app.launcher"
@@ -20,6 +21,10 @@ internal actual object AppIconPlatform {
         this.context = appContext
         restoreDefaultIfNeeded(appContext)
     }
+
+    actual fun currentBlackBackground(): Boolean = true
+
+    actual fun setBlackBackground(enabled: Boolean): Boolean = true
 
     actual fun currentIconName(): String? {
         val appContext = context ?: return null
