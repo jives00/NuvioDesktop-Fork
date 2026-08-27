@@ -199,6 +199,9 @@
             <button class="action playback-action" id="toggle" data-command="toggle" aria-label="Play">
               <svg><use id="toggleIcon" href="#icon-play"></use></svg><span id="toggleLabel">Play</span>
             </button>
+            <button class="action optional" id="nextEpisodeButton" data-command="playNextEpisode" aria-label="Next episode" hidden>
+              <svg><use href="#icon-skip-next"></use></svg><span id="nextEpisodeButtonLabel">Next episode</span>
+            </button>
             <button class="action" data-command="resize"><svg><use href="#icon-aspect"></use></svg><span id="resizeLabel">Fit</span></button>
             <button class="action" data-command="speed"><svg><use href="#icon-speed"></use></svg><span id="speedLabel">1x</span></button>
             <button class="action" data-command="subtitles"><svg><use href="#icon-subs"></use></svg><span id="subtitlesLabel">Subs</span></button>
@@ -208,7 +211,9 @@
           </div>
           <div class="playback-status">
             <div class="volume-control" id="volumeControl" aria-label="Volume">
-              <svg><use id="volumeIcon" href="#icon-volume"></use></svg>
+              <button class="volume-button" id="volumeButton" aria-label="Mute" type="button">
+                <svg><use id="volumeIcon" href="#icon-volume"></use></svg>
+              </button>
               <input id="volumeSlider" class="volume-slider" type="range" min="0" max="100" value="100" aria-label="Volume">
             </div>
             <div class="time-label" id="timeLabel">00:00 / 00:00</div>

@@ -18,6 +18,7 @@ import androidx.compose.ui.window.rememberWindowState
 import androidx.compose.ui.unit.dp
 import com.nuvio.app.core.deeplink.handleAppUrl
 import com.nuvio.app.core.diagnostics.SentryInitializer
+import com.nuvio.app.core.ui.NuvioTheme
 import com.nuvio.app.features.discordrpc.DiscordPresenceManager
 import com.nuvio.app.features.p2p.P2pStreamingEngine
 import com.nuvio.app.features.plugins.configureDesktopQuickJsLibrary
@@ -26,6 +27,7 @@ import com.nuvio.app.features.player.desktop.DesktopAppFullscreenController
 import com.nuvio.app.features.player.desktop.DesktopHostOs
 import com.nuvio.app.features.player.desktop.DesktopWindowGeometry
 import com.nuvio.app.features.player.desktop.DesktopWindowModeStorage
+import com.nuvio.app.features.player.desktop.NativePlayerBridge
 import com.nuvio.app.features.player.desktop.applyNativeDesktopWindowChrome
 import com.nuvio.app.features.player.desktop.installDesktopAppFullscreenShortcuts
 import com.nuvio.app.features.player.desktop.preloadNativePlayerBridgeAsync
@@ -33,7 +35,7 @@ import com.nuvio.app.features.player.desktop.registerDesktopAppFullscreenToggle
 import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.settings.AppIconRepository
 import com.nuvio.app.features.settings.applyDesktopRendererPreference
-import com.nuvio.app.features.settings.previewResource
+import com.nuvio.app.features.settings.transparentPreviewResource
 import java.awt.Desktop
 import javax.imageio.ImageIO
 import java.awt.Color as AwtColor
@@ -43,6 +45,11 @@ private val NuvioDesktopNativeBackground = AwtColor(0x0D, 0x0D, 0x0D)
 private const val MacosDarkAquaAppearance = "NSAppearanceNameDarkAqua"
 
 fun main(args: Array<String>) {
+    // On Linux, initialize GTK BEFORE AWT/Compose/Skia to prevent GdkDisplayManager
+    // type registration conflict (Skiko partially loads GDK without full GTK init).
+    if (System.getProperty("os.name", "").lowercase().contains("linux")) {
+        runCatching { NativePlayerBridge.initGtkEarly() }
+    }
     applyDesktopRendererPreference()
     SentryInitializer.start()
     configureDesktopQuickJsLibrary()
@@ -116,7 +123,7 @@ fun main(args: Array<String>) {
             },
             title = if (smokePlayerUrl == null) "Nuvio" else "Nuvio Player Smoke",
             state = windowState,
-            icon = painterResource(appIconState.selected.previewResource(appIconState.blackBackground)),
+            icon = painterResource(appIconState.selected.transparentPreviewResource),
         ) {
             SideEffect {
                 window.background = NuvioDesktopNativeBackground
@@ -124,8 +131,8 @@ fun main(args: Array<String>) {
                 window.contentPane.background = NuvioDesktopNativeBackground
                 (window.contentPane as? JComponent)?.isOpaque = true
             }
-            LaunchedEffect(window, appIconState.selected, appIconState.blackBackground) {
-                val backgroundSuffix = if (appIconState.blackBackground) "" else "-transparent"
+            LaunchedEffect(window, appIconState.selected) {
+                val backgroundSuffix = "-transparent"
                 val iconPath = "icons/app-icon-${appIconState.selected.key}$backgroundSuffix.png"
                 Thread.currentThread().contextClassLoader.getResourceAsStream(iconPath)?.use { stream ->
                     ImageIO.read(stream)?.let { image ->
@@ -136,6 +143,7 @@ fun main(args: Array<String>) {
 
             LaunchedEffect(window) {
                 applyNativeDesktopWindowChrome(window)
+                installLinuxExtendedMouseButtons()
                 // Windows fullscreen is emulated natively and isn't reflected by
                 // WindowPlacement, so it must be re-applied once the window peer exists.
                 fullscreenController.applyRestoredFullscreenState(window, windowState, wasFullscreenOnLastExit)
@@ -198,13 +206,17 @@ fun main(args: Array<String>) {
             if (smokePlayerUrl == null) {
                 App()
             } else {
-                PlatformPlayerSurface(
-                    sourceUrl = smokePlayerUrl,
-                    modifier = Modifier.fillMaxSize(),
-                    onControllerReady = {},
-                    onSnapshot = {},
-                    onError = {},
-                )
+                // The player surface reads LocalNuvioPlatformDensity, which only
+                // NuvioTheme provides — the bare smoke harness must supply it too.
+                NuvioTheme {
+                    PlatformPlayerSurface(
+                        sourceUrl = smokePlayerUrl,
+                        modifier = Modifier.fillMaxSize(),
+                        onControllerReady = {},
+                        onSnapshot = {},
+                        onError = {},
+                    )
+                }
             }
         }
     }

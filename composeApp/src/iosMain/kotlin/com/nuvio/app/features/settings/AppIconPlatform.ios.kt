@@ -18,10 +18,6 @@ internal actual object AppIconPlatform {
 
     private var pendingChange: CancellableContinuation<Boolean>? = null
 
-    actual fun currentBlackBackground(): Boolean = true
-
-    actual fun setBlackBackground(enabled: Boolean): Boolean = true
-
     actual fun currentIconName(): String? = AppIconOption.entries
         .mapNotNull(AppIconOption::platformName)
         .firstOrNull { name -> NuvioIsCurrentAlternateAppIcon(name) }

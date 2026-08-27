@@ -22,10 +22,6 @@ internal actual object AppIconPlatform {
         restoreDefaultIfNeeded(appContext)
     }
 
-    actual fun currentBlackBackground(): Boolean = true
-
-    actual fun setBlackBackground(enabled: Boolean): Boolean = true
-
     actual fun currentIconName(): String? {
         val appContext = context ?: return null
         return currentIconName(appContext)
