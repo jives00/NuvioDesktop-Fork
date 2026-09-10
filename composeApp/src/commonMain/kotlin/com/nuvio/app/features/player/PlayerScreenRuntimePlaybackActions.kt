@@ -80,6 +80,8 @@ internal fun PlayerScreenRuntime.resetIdentityStateIfNeeded() {
 private fun PlayerScreenRuntime.resetTrackSelectionState() {
     trackPreferenceRestoreApplied = false
     preferredAudioSelectionApplied = false
+    appliedAudioPreferences = null
+    isUserExplicitAudioSelection = false
     preferredSubtitleSelectionApplied = false
     isUserExplicitSubtitleSelection = false
     hasScannedTextTracksOnce = false
